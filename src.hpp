@@ -1,8 +1,7 @@
 #ifndef PPCA_SRC_HPP
 #define PPCA_SRC_HPP
 #include "math.h"
-
-class Monitor; // forward declaration
+#include "monitor.h"
 
 class Controller {
 
@@ -35,14 +34,15 @@ private:
     // Per-robot local counter; no globals/statics allowed.
     long long step_counter;
 
+    // Check safety assuming others keep their last-step velocity (predictive).
     bool velocity_safe_against_all(const Vec &v_candidate) const {
         int n = monitor->get_robot_number();
         for (int j = 0; j < n; ++j) {
             if (j == id) continue;
             Vec other_pos = monitor->get_pos_cur(j);
-            // Assume others remain stationary this step (by id-based schedule).
+            Vec other_v_pred = monitor->get_v_cur(j);
             Vec delta_pos = pos_cur - other_pos;
-            Vec delta_v = v_candidate; // other velocity is 0
+            Vec delta_v = v_candidate - other_v_pred;
 
             double delta_v_norm = delta_v.norm();
             double min_dis_sqr;
@@ -51,10 +51,10 @@ private:
             } else {
                 double project = delta_pos.dot(delta_v);
                 if (project >= 0) {
-                    // Moving away at t=0 -> distance non-decreasing
+                    // Moving away
                     min_dis_sqr = delta_pos.norm_sqr();
                 } else {
-                    double along = (-project) / delta_v_norm; // travel to closest approach
+                    double along = (-project) / delta_v_norm;
                     if (along < delta_v_norm * TIME_INTERVAL) {
                         min_dis_sqr = delta_pos.norm_sqr() - along * along;
                     } else {
@@ -83,13 +83,20 @@ public:
             return Vec();
         }
 
-        // Simple deterministic schedule: only robot (step % N) moves; others wait.
-        int robot_num = monitor->get_robot_number();
-        long long current_step = step_counter;
-        ++step_counter;
-        if (robot_num > 0 && (current_step % robot_num) != id) {
-            return Vec();
+        // If last step reported collisions and this robot was involved,
+        // yield to the smallest id among the colliding group.
+        if (monitor->get_warning()) {
+            auto involved = monitor->get_collision(id);
+            if (!involved.empty()) {
+                int min_id = id;
+                for (int k : involved) min_id = std::min(min_id, k);
+                if (id != min_id) {
+                    ++step_counter;
+                    return Vec();
+                }
+            }
         }
+        ++step_counter;
 
         // Desired speed towards the target, capped to avoid overshoot in this interval.
         Vec dir = to_tar.normalize();
@@ -112,4 +119,3 @@ public:
 
 
 #endif //PPCA_SRC_HPP
-
