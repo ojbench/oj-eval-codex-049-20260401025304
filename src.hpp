@@ -34,15 +34,14 @@ private:
     // Per-robot local counter; no globals/statics allowed.
     long long step_counter;
 
-    // Check safety assuming others keep their last-step velocity (predictive).
+    // Check safety assuming others remain stationary this step (id-scheduled).
     bool velocity_safe_against_all(const Vec &v_candidate) const {
         int n = monitor->get_robot_number();
         for (int j = 0; j < n; ++j) {
             if (j == id) continue;
             Vec other_pos = monitor->get_pos_cur(j);
-            Vec other_v_pred = monitor->get_v_cur(j);
             Vec delta_pos = pos_cur - other_pos;
-            Vec delta_v = v_candidate - other_v_pred;
+            Vec delta_v = v_candidate; // other robot does not move this step
 
             double delta_v_norm = delta_v.norm();
             double min_dis_sqr;
@@ -83,20 +82,13 @@ public:
             return Vec();
         }
 
-        // If last step reported collisions and this robot was involved,
-        // yield to the smallest id among the colliding group.
-        if (monitor->get_warning()) {
-            auto involved = monitor->get_collision(id);
-            if (!involved.empty()) {
-                int min_id = id;
-                for (int k : involved) min_id = std::min(min_id, k);
-                if (id != min_id) {
-                    ++step_counter;
-                    return Vec();
-                }
-            }
-        }
+        // Deterministic schedule: only robot (step % N) moves; others wait.
+        int robot_num = monitor->get_robot_number();
+        long long current_step = step_counter;
         ++step_counter;
+        if (robot_num > 0 && (current_step % robot_num) != id) {
+            return Vec();
+        }
 
         // Desired speed towards the target, capped to avoid overshoot in this interval.
         Vec dir = to_tar.normalize();
